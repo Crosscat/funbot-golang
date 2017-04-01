@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math/rand"
 	"strings"
 
 	"github.com/bwmarrin/discordgo"
@@ -37,12 +38,6 @@ func main() {
 		log.Fatal(err)
 	}
 	defer DB.Close()
-
-	messageArray := getWordArrayFromMessage("This is a test")
-	//addMessageToDB(messageArray)
-	fmt.Println(getSubjectWordContext(messageArray))
-
-	return
 
 	// Create a new Discord session using the provided bot token.
 	dg, err := discordgo.New("Bot " + Token)
@@ -79,41 +74,16 @@ func main() {
 // This function will be called (due to AddHandler above) every time a new
 // message is created on any channel that the autenticated bot has access to.
 func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
-	// Open DB connection
-	DB, err = sql.Open("sqlite3", "./main.db")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer DB.Close()
 	// Ignore all messages created by the bot itself
 	if m.Author.ID == BotID {
 		return
 	}
 
-	messageArray := getWordArrayFromMessage(m.Content)
-
-	if strings.HasPrefix(m.Content, "!talk") {
-		//s.ChannelMessageSend(m.ChannelID, fetchWord(strings.Split(m.Content, " ")[1]))
+	if strings.HasPrefix(m.Content, "!talk ") {
+		s.ChannelMessageSend(m.ChannelID, generateMessage(m.Content[6:len(m.Content)]))
 	} else {
-		addMessageToDB(messageArray)
+		addMessageToDB(m.Content)
 	}
-}
-
-func fetchWordByIndex(index string) string {
-	stmt, err := DB.Prepare("select Word from Words where ID = ?")
-	if err != nil {
-		log.Fatal(err)
-		return ""
-	}
-	defer stmt.Close()
-
-	var word string
-	err = stmt.QueryRow(index).Scan(&word)
-	if err != nil {
-		log.Fatal(err)
-		return ""
-	}
-	return word
 }
 
 //gets word information from db, returns it as a map.  If word does not exist, returns empty map.
@@ -129,13 +99,26 @@ func getWordInfo(word string) WordContext {
 	return getWordContextFromRow(row)
 }
 
+//gets word information from db, returns it as a map.  If word does not exist, returns empty map.
+func getWordInfoFromID(id int) WordContext {
+	stmt, err := DB.Prepare("select * from Words where ID = ?")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer stmt.Close()
+
+	row := stmt.QueryRow(id)
+
+	return getWordContextFromRow(row)
+}
+
 func getWordContextFromRow(row *sql.Row) WordContext {
 	var id int
 	var word string
 	var frequency int
 	var startFrequency int
 	var endFrequency int
-	err = row.Scan(&word, &id, &frequency, &startFrequency, &endFrequency)
+	err = row.Scan(&word, &id, &frequency, &endFrequency, &startFrequency)
 	if err != nil {
 		fmt.Println(err)
 	}
@@ -173,7 +156,9 @@ func updateWord(word string, start bool, end bool, data WordContext) int {
 	return id
 }
 
-func addMessageToDB(messageArray []string) {
+func addMessageToDB(message string) {
+	messageArray := getWordArrayFromMessage(message)
+
 	idArray := make([]int, len(messageArray))
 	for index, word := range messageArray { //for each word in message
 		data := getWordInfo(word) //check if word exists in table
@@ -277,18 +262,78 @@ func generateMessage(inquiry string) string {
 	wordArray := getWordArrayFromMessage(inquiry)
 	subjectWordContext := getSubjectWordContext(wordArray)
 
-	//generate phrase going backwards
-	generatePhrase(subjectWordContext)
-	//generate phrase going forwards
-	//return concatenated phrases
-	return ""
+	return generateStartPhrase(subjectWordContext) + generateEndPhrase(subjectWordContext)
 }
 
-func generatePhrase(startWord WordContext) string {
+func generatePhrase(surroundingType string, startWord WordContext, phrase string) string {
 
-	//until newestWord startFrequency/frequency > random(1f)
-	//pick a record at random where WordID = subjectWordID
-	return ""
+	//stop condition:
+	var stopFrequency int
+	if surroundingType == "FollowingWordID" { //check for start frequency
+		stopFrequency = startWord.StartFrequency
+	} else {
+		stopFrequency = startWord.EndFrequency
+	}
+
+	randVal := rand.Float64()
+	if float64(stopFrequency)/float64(startWord.Frequency) > randVal {
+		//fmt.Printf("Word: %s \n RandVal: %f \n StopFreq: %d \n Freq: %d", startWord.Word, randVal, stopFrequency, startWord.Frequency)
+		return phrase
+	}
+
+	//get next word id
+	nextID := getIDWithSurroundingIDs(surroundingType, startWord.ID)
+	if nextID == 0 {
+		return phrase
+	}
+
+	//get word info
+	nextWordContext := getWordInfoFromID(nextID)
+
+	//add word to phrase
+	phrase = phrase + " " + nextWordContext.Word
+
+	//recurse
+	return generatePhrase(surroundingType, nextWordContext, phrase)
+}
+
+func generateStartPhrase(startWord WordContext) string {
+	return reverseSentence(generatePhrase("FollowingWordID", startWord, startWord.Word))
+}
+
+func generateEndPhrase(startWord WordContext) string {
+	return generatePhrase("TrailingWordID", startWord, "")
+}
+
+func reverseSentence(sentence string) string {
+	words := strings.Split(sentence, " ")
+	var buffer bytes.Buffer
+	prefix := ""
+	for i := len(words) - 1; i >= 0; i-- {
+		buffer.WriteString(prefix)
+		buffer.WriteString(words[i])
+		prefix = " "
+	}
+	return buffer.String()
+}
+
+func getIDWithSurroundingIDs(surroundingType string, ids ...int) int {
+	var buffer bytes.Buffer
+	prefix := ""
+	for index, id := range ids {
+		buffer.WriteString(prefix)
+		buffer.WriteString(fmt.Sprintf("%s%d='%d'", surroundingType, index+1, id))
+		prefix = " And "
+	}
+	query := fmt.Sprintf("Select WordID from IDs where %s ORDER BY RANDOM()", buffer.String())
+	//fmt.Println(query)
+	row := DB.QueryRow(query)
+	var id int
+	err := row.Scan(&id)
+	if err != nil {
+		return 0
+	}
+	return id
 }
 
 type WordContext struct {
