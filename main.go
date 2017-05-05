@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/magiconair/properties"
@@ -18,10 +19,11 @@ import (
 
 // Variables used for command line parameters
 var (
-	Token          string
-	BotID          string
-	messageCounter int
-	messageWait    int
+	Token              string
+	BotID              string
+	messageCounter     int
+	messageWait        int
+	ExcludedChannelIDs map[string]int
 
 	DB  *sql.DB
 	err error
@@ -30,8 +32,17 @@ var (
 func init() {
 
 	props := properties.MustLoadFile("config.properties", properties.UTF8)
-	flag.StringVar(&Token, "t", props.MustGetString("BotID"), "Bot Token")
+	flag.StringVar(&Token, "botid", props.MustGetString("BotID"), "Bot Token")
+
+	var excludedChannels string
+	flag.StringVar(&excludedChannels, "excluded", props.GetString("ExcludedChannels", ""), "Excluded Channels")
 	flag.Parse()
+
+	ExcludedChannelIDs = make(map[string]int)
+	splitChannels := strings.Split(excludedChannels, ",")
+	for _, element := range splitChannels {
+		ExcludedChannelIDs[element] = 1
+	}
 }
 
 func main() {
@@ -95,6 +106,7 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		if message == "" {
 			message = "i don't know any of these words"
 		}
+		time.Sleep(2)
 		s.ChannelMessageSend(m.ChannelID, message)
 		fmt.Println(fmt.Sprintf("Message: %s", message))
 
@@ -103,12 +115,17 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 			message := generateMessage(m.Content)
 			if message != "" {
 				message = scrubMessage(message)
+				time.Sleep(2)
 				s.ChannelMessageSend(m.ChannelID, message)
 				messageCounter = messageWait
 			}
 		}
-		addMessageToDB(m.Content)
-		messageCounter--
+
+		_, excluded := ExcludedChannelIDs[m.ChannelID]
+		if !excluded {
+			addMessageToDB(m.Content)
+			messageCounter--
+		}
 	}
 }
 
