@@ -9,7 +9,6 @@ import (
 	"math/rand"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/magiconair/properties"
@@ -55,6 +54,15 @@ func main() {
 	}
 	defer DB.Close()
 
+	//	message := generateMessage("")
+	//	message = scrubMessage(message)
+	//	if message == "" {
+	//		message = "i don't know any of these words"
+	//	}
+	//	fmt.Println(fmt.Sprintf("Message: %s", message))
+
+	//	return
+
 	// Create a new Discord session using the provided bot token.
 	dg, err := discordgo.New("Bot " + Token)
 	if err != nil {
@@ -95,13 +103,12 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		return
 	}
 
-	if strings.HasPrefix(m.Content, "!talk ") {
-		message := generateMessage(m.Content[6:len(m.Content)])
+	if strings.HasPrefix(m.Content, "!talk") {
+		message := generateMessage(m.Content[5:len(m.Content)])
 		message = scrubMessage(message)
 		if message == "" {
 			message = "i don't know any of these words"
 		}
-		time.Sleep(2)
 		s.ChannelMessageSend(m.ChannelID, message)
 		fmt.Println(fmt.Sprintf("Message: %s", message))
 
@@ -110,7 +117,6 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 			message := generateMessage(m.Content)
 			if message != "" {
 				message = scrubMessage(message)
-				time.Sleep(2)
 				s.ChannelMessageSend(m.ChannelID, message)
 				messageCounter = messageWait
 			}
@@ -315,7 +321,8 @@ func getRandomWord() string {
 }
 
 func generateMessage(inquiry string) string {
-	if strings.Trim(inquiry, " ") == "" {
+	inquiry = strings.Trim(inquiry, " ")
+	if inquiry == "" {
 		inquiry = getRandomWord()
 	}
 
