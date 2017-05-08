@@ -8,7 +8,6 @@ import (
 	"log"
 	"math/rand"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -55,10 +54,6 @@ func main() {
 		log.Fatal(err)
 	}
 	defer DB.Close()
-
-	//fmt.Println(generateMessage("goats"))
-
-	//return
 
 	// Create a new Discord session using the provided bot token.
 	dg, err := discordgo.New("Bot " + Token)
@@ -305,7 +300,25 @@ func getWordArrayFromMessage(message string) []string {
 	return messageArray
 }
 
+func getRandomWord() string {
+	query := "Select Word From Words Order By Random()"
+
+	var word string
+
+	row := DB.QueryRow(query)
+	err := row.Scan(&word)
+	if err != nil {
+		return ""
+	}
+
+	return word
+}
+
 func generateMessage(inquiry string) string {
+	if strings.Trim(inquiry, " ") == "" {
+		inquiry = getRandomWord()
+	}
+
 	wordArray := getWordArrayFromMessage(inquiry)
 	subjectWordContext := getSubjectWordContext(wordArray)
 	if subjectWordContext.ID == 0 {
@@ -381,7 +394,7 @@ func generatePhrase(surroundingType string, startWord []WordContext, phrase stri
 func getAssociatedWordFromPhrase(word WordContext, phrase string) (WordContext, bool) {
 	wordArray := getWordArrayFromMessage(phrase)
 	var query string
-	var inWords string
+	var inWords []int
 
 	var otherWords []interface{}
 	if len(wordArray) > 1 {
@@ -392,10 +405,11 @@ func getAssociatedWordFromPhrase(word WordContext, phrase string) (WordContext, 
 			}
 			id := getWordInfo(element).ID
 			otherWords = append(otherWords, id)
+			inWords = append(inWords, id)
 		}
 
 		inString := "(?" + strings.Repeat(",?", len(otherWords)-1) + ")"
-		query = fmt.Sprintf("Select WordID, TrailingWordID1, FollowingWordID1 from IDs where WordID=? And (TrailingWordID1 In %s Or FollowingWordID1 In %s ORDER BY RANDOM()", inString, inString)
+		query = fmt.Sprintf("Select WordID, TrailingWordID1, FollowingWordID1 from IDs where WordID=? And (TrailingWordID1 In %s Or FollowingWordID1 In %s) ORDER BY RANDOM()", inString, inString)
 	} else {
 		query = "Select WordID, TrailingWordID1, FollowingWordID1 from IDs where WordID=? ORDER BY RANDOM()"
 	}
@@ -420,11 +434,20 @@ func getAssociatedWordFromPhrase(word WordContext, phrase string) (WordContext, 
 		}
 	}
 
-	if prevID != 0 && strings.Contains(inWords, strconv.Itoa(prevID)) {
+	if prevID != 0 && contains(inWords, prevID) {
 		return getWordInfoFromID(prevID), false
 	} else {
 		return getWordInfoFromID(nextID), true
 	}
+}
+
+func contains(s []int, e int) bool {
+	for _, a := range s {
+		if a == e {
+			return true
+		}
+	}
+	return false
 }
 
 func generateStartPhrase(startWord WordContext, associatedWordContext WordContext) string {
