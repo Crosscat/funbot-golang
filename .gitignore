@@ -2,3 +2,4 @@ config.properties
 *.exe
 *.db
 *.exe~
+*.db-journal
