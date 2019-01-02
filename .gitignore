@@ -1,5 +1,7 @@
 config.properties
+reddit.agent
+main.db
+codenameswordlist.txt
 *.exe
-*.db
 *.exe~
 *.db-journal

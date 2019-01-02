@@ -14,6 +14,22 @@ type FunAI struct {
 	BotDB *db.BotDB
 }
 
+func (ai *FunAI) GetResponseFromCommand(command string) string {
+	var response string
+
+	row := ai.BotDB.QueryRow("select Response from Commands where Command = ?", command)
+	err := row.Scan(&response)
+	if err != nil {
+		return ""
+	}
+	return response
+}
+
+func (ai *FunAI) AddCommand(command string, response string) {
+	query := "insert into Commands (Command, Response) values(?, ?)"
+	ai.BotDB.Update(query, command, response)
+}
+
 //gets word information from db, returns it as a map.  If word does not exist, returns empty map.
 func (ai *FunAI) getWordInfo(word string) wordContext {
 	query := "select * from Words where Word = ?"
@@ -125,7 +141,7 @@ func (ai *FunAI) insertIDs(insertMap map[string]int) {
 	ai.BotDB.Update(query, insertMap["WordID"], insertMap["FollowingWordID1"], insertMap["FollowingWordID2"], insertMap["FollowingWordID3"], insertMap["TrailingWordID1"], insertMap["TrailingWordID2"], insertMap["TrailingWordID3"])
 }
 
-func (ai *FunAI) getSubjectwordContext(messageArray []string) wordContext {
+func (ai *FunAI) getSubjectWordContext(messageArray []string) wordContext {
 	query := "select * from Words where Word In (?" + strings.Repeat(",?", len(messageArray)-1) + ") and Frequency > 0 order by Frequency asc"
 
 	var params []interface{}
@@ -142,11 +158,26 @@ func getWordArrayFromMessage(message string) []string {
 	//remove punctuation?
 	message = strings.ToLower(message)
 	messageArray := strings.Split(removeWhiteSpace(message), " ")
+	messageArray = removeDuplicates(messageArray)
 	return messageArray
 }
 
+func removeDuplicates(messageArray []string) []string {
+	messageMap := make(map[string]int)
+	for _, word := range messageArray {
+		messageMap[word] = 1
+	}
+	newArray := make([]string, len(messageMap))
+	index := 0
+	for key, _ := range messageMap {
+		newArray[index] = key
+		index++
+	}
+	return newArray
+}
+
 func (ai *FunAI) getRandomWord() string {
-	query := "Select Word From Words Order By Random()"
+	query := "SELECT Word FROM Words WHERE ID IN (SELECT ID FROM Words ORDER BY RANDOM() LIMIT 1)"
 
 	var word string
 
@@ -171,7 +202,7 @@ func (ai *FunAI) getIDWithSurroundingIDs(surroundingType string, ids ...int) int
 
 		params = append(params, id)
 	}
-	query := fmt.Sprintf("Select WordID from IDs where %s ORDER BY RANDOM()", buffer.String())
+	query := fmt.Sprintf("SELECT WordID FROM IDs WHERE %s ORDER BY RANDOM() LIMIT 1", buffer.String())
 
 	row := ai.BotDB.QueryRow(query, params...)
 	var id int
@@ -193,17 +224,17 @@ func (ai *FunAI) GenerateMessage(inquiry string) string {
 	}
 
 	wordArray := getWordArrayFromMessage(inquiry)
-	subjectwordContext := ai.getSubjectwordContext(wordArray)
-	if subjectwordContext.id == 0 {
+	subjectWordContext := ai.getSubjectWordContext(wordArray)
+	if subjectWordContext.id == 0 {
 		return ""
 	}
 
-	associatedwordContext, comesAfter := ai.getAssociatedWordFromPhrase(subjectwordContext, inquiry)
+	associatedWordContext, comesAfter := ai.getAssociatedWordFromPhrase(subjectWordContext, inquiry)
 
 	if comesAfter {
-		return ai.generateStartPhrase(subjectwordContext, associatedwordContext) + ai.generateEndPhrase(subjectwordContext, associatedwordContext)
+		return ai.generateStartPhrase(subjectWordContext, associatedWordContext) + ai.generateEndPhrase(subjectWordContext, associatedWordContext)
 	} else {
-		return ai.generateStartPhrase(associatedwordContext, subjectwordContext) + ai.generateEndPhrase(associatedwordContext, subjectwordContext)
+		return ai.generateStartPhrase(associatedWordContext, subjectWordContext) + ai.generateEndPhrase(associatedWordContext, subjectWordContext)
 	}
 }
 
@@ -282,9 +313,9 @@ func (ai *FunAI) getAssociatedWordFromPhrase(word wordContext, phrase string) (w
 		}
 
 		inString := "(?" + strings.Repeat(",?", len(otherWords)-1) + ")"
-		query = fmt.Sprintf("Select WordID, TrailingWordID1, FollowingWordID1 from IDs where WordID=? And (TrailingWordID1 In %s Or FollowingWordID1 In %s) ORDER BY RANDOM()", inString, inString)
+		query = fmt.Sprintf("SELECT WordID, TrailingWordID1, FollowingWordID1 FROM IDs WHERE WordID=? AND (TrailingWordID1 IN %s Or FollowingWordID1 IN %s) ORDER BY RANDOM() LIMIT 1", inString, inString)
 	} else {
-		query = "Select WordID, TrailingWordID1, FollowingWordID1 from IDs where WordID=? ORDER BY RANDOM()"
+		query = "SELECT WordID, TrailingWordID1, FollowingWordID1 FROM IDs WHERE WordID=? ORDER BY RANDOM() LIMIT 1"
 	}
 
 	//Creating new array containing all query values
@@ -299,7 +330,7 @@ func (ai *FunAI) getAssociatedWordFromPhrase(word wordContext, phrase string) (w
 	row := ai.BotDB.QueryRow(query, params...)
 	err := row.Scan(&id, &prevID, &nextID)
 	if err != nil {
-		query = "Select WordID, TrailingWordID1, FollowingWordID1 from IDs where WordID=? ORDER BY RANDOM()"
+		query = "SELECT WordID, TrailingWordID1, FollowingWordID1 FROM IDs WHERE WordID=? ORDER BY RANDOM() LIMIT 1"
 		row := ai.BotDB.QueryRow(query, params[0])
 		err := row.Scan(&id, &prevID, &nextID)
 		if err != nil {
@@ -323,9 +354,9 @@ func contains(s []int, e int) bool {
 	return false
 }
 
-func (ai *FunAI) generateStartPhrase(startWord wordContext, associatedwordContext wordContext) string {
-	wordContexts := []wordContext{startWord, associatedwordContext}
-	if startWord == associatedwordContext {
+func (ai *FunAI) generateStartPhrase(startWord wordContext, associatedWordContext wordContext) string {
+	wordContexts := []wordContext{startWord, associatedWordContext}
+	if startWord == associatedWordContext {
 		wordContexts = []wordContext{startWord}
 	}
 
@@ -333,9 +364,9 @@ func (ai *FunAI) generateStartPhrase(startWord wordContext, associatedwordContex
 	return phrase
 }
 
-func (ai *FunAI) generateEndPhrase(startWord wordContext, associatedwordContext wordContext) string {
-	wordContexts := []wordContext{associatedwordContext, startWord}
-	if startWord == associatedwordContext {
+func (ai *FunAI) generateEndPhrase(startWord wordContext, associatedWordContext wordContext) string {
+	wordContexts := []wordContext{associatedWordContext, startWord}
+	if startWord == associatedWordContext {
 		wordContexts = []wordContext{startWord}
 	}
 
